@@ -20,7 +20,18 @@ AI-Powered Skin Lesion Classification — Samsung Innovation Campus 8th Edition 
 
 On Windows, you can also double-click `run.bat`. It uses the project's `.venv` when present.
 
+Gemini can be configured in Streamlit secrets using TOML:
+
+```toml
+GEMINI_API_KEY = "your_api_key"
+GEMINI_MODEL = "gemini-3.8-flash"
+```
+
+Streamlit secrets take precedence over `.env`. If your project cannot use the default model, set `GEMINI_MODEL` to an available text model shown in Google AI Studio. The chatbot displays the API error code and provider message for rejected requests; failed requests are excluded from conversation history.
+
 Keep `best_model_final.keras`, `class_names.json`, and `Samsung-Innovation-Campus.jpg` beside `app.py` when deploying.
+
+For Streamlit Community Cloud, select **Python 3.13** in **Advanced settings** before deploying. The requirements pin the versions tested in the local Python 3.13 environment, including Keras for model loading. TensorFlow 2.20.0 does not provide Python 3.14 wheels. If an existing deployment uses the wrong Python version, preserve its secrets and app settings, then delete and redeploy it with Python 3.13; editing requirements does not change the cloud interpreter.
 
 The model file is larger than GitHub's regular per-file limit. Before pushing the project to GitHub, track it with Git LFS (`git lfs install` and `git lfs track "best_model_final.keras"`), then commit the generated `.gitattributes` together with the model. Streamlit Community Cloud supports Git LFS.
 

@@ -69,14 +69,28 @@ def prepare_image(image):
     return tf.expand_dims(tf.cast(tensor, tf.float32), axis=0)
 
 
-def get_api_key():
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if key:
-        return key
+def get_setting(name, default=""):
     try:
-        return str(st.secrets.get("GEMINI_API_KEY", "")).strip()
+        value = st.secrets.get(name, "")
     except Exception:
-        return ""
+        value = ""
+    return str(value or os.getenv(name) or default).strip()
+
+
+def gemini_error(error, api_key):
+    code = getattr(error, "code", None)
+    messages = {
+        400: "Gemini rejected the request. Check your API key and whether the API is available for your project and region.",
+        401: "Gemini authentication failed. Check GEMINI_API_KEY in Streamlit secrets.",
+        403: "Gemini access was denied. Check the key's restrictions, project permissions, and billing status in Google AI Studio.",
+        404: "The configured Gemini model is unavailable. Set GEMINI_MODEL in Streamlit secrets to a model available to your API project.",
+        429: "Gemini's rate limit or quota was reached. Check your quota and billing in Google AI Studio, then retry when quota is available.",
+    }
+    message = messages.get(code, "Gemini is temporarily unavailable. Please try again shortly.")
+    if code:
+        detail = str(getattr(error, "message", "")).replace(api_key, "[hidden]")[:500]
+        return f"{message}\n\nAPI error {code}: {detail}"
+    return message
 
 
 def prediction_context():
@@ -206,7 +220,8 @@ elif page == "AI Chatbot":
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        api_key = get_api_key()
+        api_key = get_setting("GEMINI_API_KEY")
+        successful = False
         if not api_key:
             answer = "Gemini is not configured yet. Add GEMINI_API_KEY to your `.env` file or Streamlit secrets, then restart the app."
         else:
@@ -223,7 +238,7 @@ elif page == "AI Chatbot":
                     for item in st.session_state.chat_history
                 ]
                 response = client.models.generate_content(
-                    model="gemini-3.8-flash",
+                    model=get_setting("GEMINI_MODEL", "gemini-3.8-flash"),
                     contents=history,
                     config=types.GenerateContentConfig(
                         system_instruction=(
@@ -238,9 +253,13 @@ elif page == "AI Chatbot":
                     ),
                 )
                 answer = response.text or "I couldn't create a response just now. Please try again."
+                successful = bool(response.text)
             except Exception as error:
-                answer = "Gemini could not respond just now. Check your connection and API key, then try again."
-        st.session_state.chat_history.append({"role": "assistant", "content": answer})
+                answer = gemini_error(error, api_key)
+        if successful:
+            st.session_state.chat_history.append({"role": "assistant", "content": answer})
+        else:
+            st.session_state.chat_history.pop()
         with st.chat_message("assistant"):
             st.markdown(answer)
 else:
