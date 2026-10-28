@@ -29,6 +29,16 @@ GEMINI_MODEL = "gemini-3.8-flash"
 
 Streamlit secrets take precedence over `.env`. If your project cannot use the default model, set `GEMINI_MODEL` to an available text model shown in Google AI Studio. The chatbot displays the API error code and provider message for rejected requests; failed requests are excluded from conversation history.
 
+To use OpenRouter instead, set these Streamlit secrets (or .env values):
+
+```toml
+AI_PROVIDER = "openrouter"
+OPENROUTER_API_KEY = "your_openrouter_api_key"
+OPENROUTER_MODEL = "openrouter/free"
+```
+
+Create a key at https://openrouter.ai/settings/keys. You can replace the model ID with another model from the OpenRouter catalog. The free router uses available free models and is subject to availability and rate limits. With this provider selected, chat messages and the latest prediction context go to OpenRouter and its selected model provider. Set `AI_PROVIDER = "gemini"` to switch back.
+
 Keep `best_model_final.keras`, `class_names.json`, and `Samsung-Innovation-Campus.jpg` beside `app.py` when deploying.
 
 For Streamlit Community Cloud, select **Python 3.13** in **Advanced settings** before deploying. The requirements pin the versions tested in the local Python 3.13 environment, including Keras for model loading. TensorFlow 2.20.0 does not provide Python 3.14 wheels. If an existing deployment uses the wrong Python version, preserve its secrets and app settings, then delete and redeploy it with Python 3.13; editing requirements does not change the cloud interpreter.

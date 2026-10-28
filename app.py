@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import requests
 import streamlit as st
 import tensorflow as tf
 from PIL import Image, UnidentifiedImageError
@@ -91,6 +92,23 @@ def gemini_error(error, api_key):
         detail = str(getattr(error, "message", "")).replace(api_key, "[hidden]")[:500]
         return f"{message}\n\nAPI error {code}: {detail}"
     return message
+
+
+def ask_gemini(api_key, instruction):
+    from google import genai
+    from google.genai import types
+
+    with genai.Client(api_key=api_key) as client:
+        response = client.models.generate_content(
+            model=get_setting("GEMINI_MODEL", "gemini-3.8-flash"),
+            contents=[
+                {"role": "model" if item["role"] == "assistant" else "user",
+                 "parts": [{"text": item["content"]}]}
+                for item in st.session_state.chat_history
+            ],
+            config=types.GenerateContentConfig(system_instruction=instruction),
+        )
+    return response.text
 
 
 def prediction_context():
@@ -220,42 +238,64 @@ elif page == "AI Chatbot":
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        api_key = get_setting("GEMINI_API_KEY")
+        provider = get_setting("AI_PROVIDER", "gemini").lower()
+        key_name = "OPENROUTER_API_KEY" if provider == "openrouter" else "GEMINI_API_KEY"
+        api_key = get_setting(key_name)
         successful = False
         if not api_key:
-            answer = "Gemini is not configured yet. Add GEMINI_API_KEY to your `.env` file or Streamlit secrets, then restart the app."
+            answer = f"Add {key_name} to your Streamlit secrets or .env file to enable the chatbot."
         else:
             try:
-                from google import genai
-                from google.genai import types
-
-                client = genai.Client(api_key=api_key)
-                history = [
-                    {
-                        "role": "model" if item["role"] == "assistant" else "user",
-                        "parts": [{"text": item["content"]}],
-                    }
-                    for item in st.session_state.chat_history
-                ]
-                response = client.models.generate_content(
-                    model=get_setting("GEMINI_MODEL", "gemini-3.8-flash"),
-                    contents=history,
-                    config=types.GenerateContentConfig(
-                        system_instruction=(
-                            "You are a supportive skin-health information assistant. Give general, clear, cautious information. "
-                            "Never diagnose, claim certainty from an image-classifier score, recommend delaying care, or prescribe treatment. "
-                            "Encourage a qualified dermatologist for personal concerns and urgent care for severe symptoms. "
-                            "Explain that predictions are not medical diagnoses and scores are not disease probabilities. "
-                            "Use the latest scan for questions about the current result; older messages may refer to a different image. "
-                            "Ask for clarification if the user refers to an earlier scan. "
-                            "The latest scan context is: " + prediction_context()
-                        )
-                    ),
+                instruction = (
+                    "You are a supportive skin-health information assistant. Give general, clear, cautious information. "
+                    "Never diagnose, claim certainty from an image-classifier score, recommend delaying care, or prescribe treatment. "
+                    "Encourage a qualified dermatologist for personal concerns and urgent care for severe symptoms. "
+                    "Explain that predictions are not medical diagnoses and scores are not disease probabilities. "
+                    "Use the latest scan for questions about the current result; older messages may refer to a different image. "
+                    "Ask for clarification if the user refers to an earlier scan. "
+                    "The latest scan context is: " + prediction_context()
                 )
-                answer = response.text or "I couldn't create a response just now. Please try again."
-                successful = bool(response.text)
+                if provider == "openrouter":
+                    response = requests.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {api_key}", "X-Title": "OncoDerma Scanner"},
+                        json={
+                            "model": get_setting("OPENROUTER_MODEL", "openrouter/free"),
+                            "messages": [{"role": "system", "content": instruction}] +
+                                        st.session_state.chat_history,
+                            "max_tokens": 1024,
+                        },
+                        timeout=60,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    if "error" in data:
+                        raise ValueError("OpenRouter returned an error. Check the model and account quota in your dashboard.")
+                    answer = data["choices"][0]["message"]["content"]
+                    successful = isinstance(answer, str) and bool(answer.strip())
+                    if not successful:
+                        answer = "OpenRouter returned no text. Please retry or choose another OPENROUTER_MODEL."
+                elif provider == "gemini":
+                    answer = ask_gemini(api_key, instruction)
+                    successful = bool(answer)
+                    if not successful:
+                        answer = "Gemini returned no text. Please try again."
+                else:
+                    answer = "Set AI_PROVIDER to gemini or openrouter in Streamlit secrets."
+            except requests.HTTPError as error:
+                code = error.response.status_code
+                guidance = {
+                    401: "Check OPENROUTER_API_KEY.",
+                    402: "Check your OpenRouter credit balance or select an available free model.",
+                    403: "Check your OpenRouter account permissions and model access.",
+                    404: "Check OPENROUTER_MODEL against the model ID in the OpenRouter catalog.",
+                    429: "Your OpenRouter rate limit or quota was reached. Wait and retry.",
+                }
+                answer = f"OpenRouter API error {code}. " + guidance.get(code, "The provider may be busy; retry or choose another model.")
+            except requests.RequestException:
+                answer = "OpenRouter could not be reached or timed out. Please retry shortly."
             except Exception as error:
-                answer = gemini_error(error, api_key)
+                answer = gemini_error(error, api_key) if provider == "gemini" else "OpenRouter could not return a valid response. Check your model and account status."
         if successful:
             st.session_state.chat_history.append({"role": "assistant", "content": answer})
         else:
