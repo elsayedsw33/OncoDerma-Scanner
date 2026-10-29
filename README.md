@@ -41,6 +41,10 @@ Create a key at https://openrouter.ai/settings/keys. You can replace the model I
 
 Keep `best_model_final.keras`, `class_names.json`, and `Samsung-Innovation-Campus.jpg` beside `app.py` when deploying.
 
+Also include `logo.jfif` for the app header and `benign_&_malignant_model.keras` for binary classification. Both model files are covered by the existing Git LFS rule. If a model is only a short LFS pointer locally, run `git lfs pull` to download its weights.
+
+The binary notebook `benmalignant_classifier.ipynb` confirms output index 0 = benign, index 1 = malignant, and RGB → TensorFlow bilinear resize to 300×300 → float32 pixels at 0–255. These verified settings are stored in `binary_model_config.json`; include that file when deploying. Each new scan runs both models independently, stores both results in the session, and shares both outputs with the configured AI provider. The About page includes the binary notebook's recorded evaluation: 89.26% accuracy on 3,800 test images. These recorded scores are not a fresh evaluation of the supplied checkpoint.
+
 For Streamlit Community Cloud, select **Python 3.13** in **Advanced settings** before deploying. The requirements pin the versions tested in the local Python 3.13 environment, including Keras for model loading. TensorFlow 2.20.0 does not provide Python 3.14 wheels. If an existing deployment uses the wrong Python version, preserve its secrets and app settings, then delete and redeploy it with Python 3.13; editing requirements does not change the cloud interpreter.
 
 The model file is larger than GitHub's regular per-file limit. Before pushing the project to GitHub, track it with Git LFS (`git lfs install` and `git lfs track "best_model_final.keras"`), then commit the generated `.gitattributes` together with the model. Streamlit Community Cloud supports Git LFS.

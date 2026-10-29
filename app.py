@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).parent
 load_dotenv(ROOT / ".env")
 MODEL_PATH = ROOT / "best_model_final.keras"
+BINARY_MODEL_PATH = ROOT / "benign_&_malignant_model.keras"
+BINARY_CONFIG_PATH = ROOT / "binary_model_config.json"
 CLASS_NAMES_PATH = ROOT / "class_names.json"
 IMAGE_SIZE = (300, 300)
 
@@ -51,10 +53,38 @@ st.markdown(
 
 
 @st.cache_resource
-def load_model():
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(f"Model file not found: {MODEL_PATH.name}")
-    return tf.keras.models.load_model(MODEL_PATH, compile=False)
+def load_model(path=MODEL_PATH):
+    if not path.exists():
+        raise FileNotFoundError(f"Model file not found: {path.name}")
+    with path.open("rb") as file:
+        if file.read(40).startswith(b"version https://git-lfs.github.com"):
+            raise ValueError(f"{path.name} is a Git LFS pointer. Download its model weights with git lfs pull.")
+    return tf.keras.models.load_model(path, compile=False)
+
+
+def binary_config():
+    if not BINARY_CONFIG_PATH.exists():
+        return None
+    config = json.loads(BINARY_CONFIG_PATH.read_text(encoding="utf-8"))
+    names = config["class_names"]
+    if len(names) != 2 or {name.lower() for name in names} != {"benign", "malignant"}:
+        raise ValueError("Binary class_names must contain Benign and Malignant in the training output order.")
+    if config.get("preprocessing") != "rgb_resize_float32_0_255":
+        raise ValueError("The binary model's documented preprocessing must be provided before enabling predictions.")
+    return names
+
+
+def predict_binary(image):
+    names = binary_config()
+    if names is None:
+        return None
+    model = load_model(BINARY_MODEL_PATH)
+    if model.input_shape[1:] != (300, 300, 3) or model.output_shape[-1] != 2:
+        raise ValueError("The binary model does not match its verified 300×300 RGB input and two outputs.")
+    scores = np.asarray(model.predict(prepare_image(image), verbose=0))[0]
+    index = int(np.argmax(scores))
+    return {"label": names[index], "confidence": float(scores[index] * 100),
+            "scores": [(name, float(score * 100)) for name, score in zip(names, scores)]}
 
 
 def get_class_names():
@@ -121,6 +151,8 @@ def prediction_context():
          "description": LESION_INFO[label][1]}
         for label, score in result["top_three"]
     ]
+    details["binary_prediction"] = result.get("binary_prediction")
+    details["interpretation"] = "Independent model outputs may disagree. Neither output is a diagnosis; a Benign result cannot rule out cancer."
     return json.dumps(details)
 
 
@@ -129,11 +161,17 @@ def discuss_results():
 
 
 def render_header():
-    st.markdown(
-        '<div class="hero"><h1>OncoDerma Scanner</h1>'
-        '<p>AI-Powered Skin Lesion Classification</p></div>',
-        unsafe_allow_html=True,
-    )
+    logo, title = st.columns([1, 5], vertical_alignment="center")
+    with logo:
+        if (ROOT / "logo.jfif").exists():
+            st.image(str(ROOT / "logo.jfif"), width="stretch")
+    with title:
+        st.markdown(
+            '<div class="hero"><h1>OncoDerma Scanner</h1>'
+            '<p>AI-Powered Skin Lesion Classification</p>'
+            '<p><strong>Early detection can save lives</strong></p></div>',
+            unsafe_allow_html=True,
+        )
 
 
 with st.sidebar:
@@ -172,6 +210,12 @@ if page == "Scanner":
                             order = np.argsort(scores)[::-1][:3]
                             label = class_names[int(order[0])]
                             full_name, explanation = LESION_INFO.get(label, (label, ""))
+                            binary_result = None
+                            binary_error = None
+                            try:
+                                binary_result = predict_binary(image)
+                            except Exception as error:
+                                binary_error = str(error)
                             st.session_state.latest_prediction = {
                                 "label": label,
                                 "image_id": upload_id,
@@ -180,6 +224,8 @@ if page == "Scanner":
                                 "confidence": float(scores[order[0]] * 100),
                                 "explanation": explanation,
                                 "top_three": [(class_names[int(i)], float(scores[i] * 100)) for i in order],
+                                "binary_prediction": binary_result,
+                                "binary_error": binary_error,
                             }
         except (UnidentifiedImageError, OSError, ValueError) as error:
             st.error(f"Could not read that image. Please upload a valid JPG or PNG. ({error})")
@@ -191,8 +237,24 @@ if page == "Scanner":
         with st.container(border=True):
             st.subheader("Latest result")
             st.caption(f"Analyzed image: {result.get('filename', 'Previous scan')}")
-            st.markdown(f"### {result['full_name']} · `{result['label']}`")
-            st.metric("Model confidence score", f"{result['confidence']:.1f}%")
+            lesion_column, binary_column = st.columns(2)
+            with lesion_column:
+                st.markdown("**Lesion classification**")
+                st.markdown(f"### {result['full_name']} · `{result['label']}`")
+                st.metric("Lesion model confidence", f"{result['confidence']:.1f}%")
+            with binary_column:
+                st.markdown("**Benign / Malignant classification**")
+                binary = result.get("binary_prediction")
+                if binary:
+                    st.markdown(f"### {binary['label'].title()}")
+                    st.metric("Binary model confidence", f"{binary['confidence']:.1f}%")
+                    for name, score in binary["scores"]:
+                        st.write(f"{name.title()} — {score:.1f}%")
+                        st.progress(min(max(score / 100, 0.0), 1.0))
+                elif result.get("binary_error"):
+                    st.error("Binary analysis unavailable: " + result["binary_error"])
+                else:
+                    st.info("Binary analysis awaits the training label order and preprocessing metadata in binary_model_config.json.")
             st.write(result["explanation"])
             st.markdown("**Top 3 model predictions**")
             for label, score in result["top_three"]:
@@ -205,6 +267,7 @@ if page == "Scanner":
                 "This tool is for education only and cannot diagnose skin conditions. For a changing, painful, bleeding, "
                 "or concerning lesion, consult a qualified dermatologist."
             )
+            st.caption("The two models are independent and can disagree. A Benign model output cannot rule out cancer.")
 elif page == "AI Chatbot":
     render_header()
     st.subheader("Ask about skin health")
@@ -213,6 +276,9 @@ elif page == "AI Chatbot":
     if result:
         st.info(f"Discussing: {result['full_name']} — {result['confidence']:.1f}% model score. "
                 f"Image: {result.get('filename', 'Previous scan')}")
+        if result.get("binary_prediction"):
+            binary = result["binary_prediction"]
+            st.caption(f"Binary model: {binary['label']} — {binary['confidence']:.1f}% model score.")
     else:
         st.info("You can ask general skin-health questions, or analyze an image on the Scanner page first.")
     if "chat_history" not in st.session_state:
@@ -312,6 +378,40 @@ else:
         "Its classifier has dense layers of 512, 256, and 64 units, each followed by batch normalization, "
         "ReLU activation, and 20% dropout. The final layer produces eight class scores."
     )
+    st.markdown("**Additional Benign / Malignant model**")
+    st.write(
+        "The supplied benign_&_malignant_model.keras archive also contains EfficientNetB6 with a "
+        "300 × 300 RGB input and a two-unit softmax output. The binary notebook, "
+        "benmalignant_classifier.ipynb, confirms output 0 = benign and output 1 = malignant. "
+        "It uses the same RGB, TensorFlow resize to 300 × 300, and float32 pixel values at 0–255 "
+        "as the original model. Both outputs are shown independently for the same uploaded image."
+    )
+    with st.expander("Binary model training and recorded evaluation"):
+        st.write(
+            "The notebook downloads a resized ISIC 2019 dataset and loads train-metadata.csv, "
+            "using its target column as binary labels. It records 25,331 images, split into "
+            "17,731 training, 3,800 validation and 3,800 test images with stratification and seed 42. "
+            "Training uses batches of 8, balanced class weights, and the same augmentation described below. "
+            "It replaces the original classifier with a two-class softmax head, trains the head for two epochs, "
+            "then fine-tunes the backbone's top_ layers with Adam at an initial learning rate of 0.0005. "
+            "The final stage allows 30 epochs, stops after epoch 9, and restores epoch 1's weights. "
+            "Its loss is sparse categorical cross-entropy; early stopping has patience 8, and learning-rate "
+            "reduction uses factor 0.5, patience 1, and a minimum rate of 0.000001."
+        )
+        st.caption("Recorded notebook test results, not a new evaluation of the supplied model file. Precision, recall and F1 use weighted averages.")
+        for column, name, value in zip(st.columns(4), ["Accuracy", "Precision", "Recall", "F1-score"],
+                                       [89.26, 90.40, 89.26, 89.66]):
+            column.metric(name, f"{value:.2f}%")
+        st.code(
+            "              precision  recall  f1-score  support\n"
+            "benign           0.9563  0.9110    0.9331     3122\n"
+            "malignant        0.6634  0.8083    0.7287      678\n"
+            "macro avg        0.8099  0.8596    0.8309     3800\n"
+            "weighted avg     0.9040  0.8926    0.8966     3800",
+            language=None,
+        )
+        st.caption("Confusion matrix: actual classes in rows, predicted classes in columns; benign, malignant.")
+        st.code("[[2844  278]\n [ 130  548]]", language=None)
 
     st.subheader("Dataset")
     st.write(

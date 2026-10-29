@@ -1,0 +1,5 @@
+{
+  "class_names": ["benign", "malignant"],
+  "preprocessing": "rgb_resize_float32_0_255",
+  "source": "benmalignant_classifier.ipynb: cells 10 and 40"
+}
