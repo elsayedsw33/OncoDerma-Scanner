@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import altair as alt
 import numpy as np
 import requests
 import streamlit as st
@@ -158,6 +159,29 @@ def prediction_context():
 
 def discuss_results():
     st.session_state.page = "AI Chatbot"
+
+
+def show_confusion_matrix(matrix, labels):
+    counts = np.asarray(matrix, dtype=int)
+    rows = [
+        {"Actual": actual, "Predicted": predicted, "Images": int(counts[i, j])}
+        for i, actual in enumerate(labels)
+        for j, predicted in enumerate(labels)
+    ]
+    chart = alt.Chart(alt.Data(values=rows)).encode(
+        x=alt.X("Predicted:N", sort=labels, title="Predicted class", axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Actual:N", sort=labels, title="Actual class"),
+        tooltip=["Actual:N", "Predicted:N", "Images:Q"],
+    )
+    cells = chart.mark_rect().encode(
+        color=alt.Color("Images:Q", scale=alt.Scale(scheme="blues", domain=[0, int(counts.max())]),
+                        legend=alt.Legend(title="Images"))
+    )
+    numbers = chart.mark_text(fontSize=13).encode(
+        text=alt.Text("Images:Q", format="d"),
+        color=alt.condition(alt.datum.Images > counts.max() / 2, alt.value("white"), alt.value("#07111f")),
+    )
+    st.altair_chart((cells + numbers).properties(height=420 if len(labels) > 2 else 240), width="stretch")
 
 
 def render_header():
@@ -411,7 +435,7 @@ else:
             language=None,
         )
         st.caption("Confusion matrix: actual classes in rows, predicted classes in columns; benign, malignant.")
-        st.code("[[2844  278]\n [ 130  548]]", language=None)
+        show_confusion_matrix([[2844, 278], [130, 548]], ["benign", "malignant"])
 
     st.subheader("Dataset")
     st.write(
@@ -478,7 +502,9 @@ else:
                 st.code(classification.strip(), language=None)
             st.markdown("**Confusion matrix**")
             st.caption("Rows: actual classes. Columns: predicted classes. Order: " + ", ".join(get_class_names()))
-            st.code(matrix.strip(), language=None)
+            labels = get_class_names()
+            counts = np.fromstring(matrix.replace("[", "").replace("]", ""), sep=" ", dtype=int)
+            show_confusion_matrix(counts.reshape(len(labels), len(labels)), labels)
         else:
             st.caption("The detailed evaluation output is unavailable in this notebook copy.")
     except (OSError, ValueError, KeyError, IndexError):
